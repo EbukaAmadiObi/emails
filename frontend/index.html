@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Email Finder</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header h1 { font-size: 16px; font-weight: 600; }
+    header span { font-size: 12px; color: #666; }
+
+    .container { max-width: 960px; margin: 32px auto; padding: 0 24px; }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #e0e0e0;
+      margin-bottom: 24px;
+    }
+
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      color: #666;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      user-select: none;
+    }
+
+    .tab.active { color: #1a1a1a; border-bottom-color: #1a1a1a; }
+    .tab:hover:not(.active) { color: #333; }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 140px; }
+
+    label { font-size: 12px; font-weight: 500; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+
+    input[type="text"] {
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus { border-color: #1a1a1a; }
+
+    button {
+      background: #1a1a1a;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 9px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+
+    button:hover { background: #333; }
+    button:disabled { background: #999; cursor: not-allowed; }
+
+    .result-box {
+      margin-top: 20px;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      padding: 16px;
+      background: #fafafa;
+      display: none;
+    }
+
+    .result-box.visible { display: block; }
+
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-verified   { background: #d4edda; color: #1a5c2a; }
+    .badge-not_found  { background: #f8d7da; color: #721c24; }
+    .badge-unverifiable { background: #fff3cd; color: #856404; }
+    .badge-inconclusive { background: #e2e3e5; color: #383d41; }
+
+    .email-found { font-size: 18px; font-weight: 600; margin-top: 8px; font-family: monospace; }
+
+    /* Batch */
+    .drop-zone {
+      border: 2px dashed #d0d0d0;
+      border-radius: 6px;
+      padding: 40px 24px;
+      text-align: center;
+      color: #666;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: #1a1a1a;
+      background: #f0f0f0;
+    }
+
+    .drop-zone input { display: none; }
+    .drop-zone p { margin-top: 8px; font-size: 12px; color: #999; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    thead th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #666;
+      padding: 8px 12px;
+      border-bottom: 2px solid #e0e0e0;
+    }
+
+    tbody tr { border-bottom: 1px solid #f0f0f0; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody td { padding: 10px 12px; font-size: 13px; }
+    tbody td.email { font-family: monospace; }
+
+    .progress-bar-wrap {
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      margin: 16px 0 8px;
+      display: none;
+    }
+
+    .progress-bar-wrap.visible { display: block; }
+
+    .progress-bar {
+      height: 100%;
+      background: #1a1a1a;
+      border-radius: 2px;
+      transition: width 0.3s;
+      width: 0%;
+    }
+
+    .progress-label { font-size: 12px; color: #666; }
+
+    .batch-actions { display: flex; gap: 12px; margin-top: 16px; align-items: center; }
+
+    .verifying-row { color: #999; font-style: italic; }
+
+    .hint { font-size: 12px; color: #888; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Email Finder</h1>
+  <span>Self-hosted • No credits • SMTP verification</span>
+</header>
+
+<div class="container">
+
+  <div class="tabs">
+    <div class="tab active" data-tab="single">Single Lookup</div>
+    <div class="tab" data-tab="batch">Batch CSV</div>
+  </div>
+
+  <!-- ===== SINGLE LOOKUP ===== -->
+  <div class="panel active" id="panel-single">
+    <div class="card">
+      <div class="form-row">
+        <div class="field">
+          <label>First name</label>
+          <input type="text" id="s-first" placeholder="John" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Last name</label>
+          <input type="text" id="s-last" placeholder="Smith" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Domain</label>
+          <input type="text" id="s-domain" placeholder="acme.com" autocomplete="off">
+        </div>
+        <button id="s-btn" onclick="doLookup()">Find email</button>
+      </div>
+
+      <div id="s-result" class="result-box"></div>
+    </div>
+  </div>
+
+  <!-- ===== BATCH CSV ===== -->
+  <div class="panel" id="panel-batch">
+    <div class="card">
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('csv-file').click()">
+        <input type="file" id="csv-file" accept=".csv" onchange="handleFile(this.files[0])">
+        <strong>Drop a CSV here or click to browse</strong>
+        <p>Required columns: first_name, last_name, domain</p>
+      </div>
+
+      <div class="hint">
+        Example:
+        <code>first_name,last_name,domain</code> &nbsp;→&nbsp;
+        <code>John,Smith,acme.com</code>
+      </div>
+
+      <div id="b-progress-wrap" class="progress-bar-wrap">
+        <div id="b-progress-bar" class="progress-bar"></div>
+      </div>
+      <div id="b-progress-label" class="progress-label"></div>
+
+      <div id="b-actions" class="batch-actions" style="display:none">
+        <button id="b-download" onclick="downloadCSV()" disabled>Download results CSV</button>
+        <span id="b-summary"></span>
+      </div>
+
+      <table id="b-table" style="display:none">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Domain</th>
+            <th>Email</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="b-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+  // --- Tab switching ---
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+
+  // --- Drag-and-drop ---
+  const dropZone = document.getElementById('drop-zone');
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+
+  // --- Single lookup ---
+  document.getElementById('s-domain').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLookup();
+  });
+
+  async function doLookup() {
+    const first  = document.getElementById('s-first').value.trim();
+    const last   = document.getElementById('s-last').value.trim();
+    const domain = document.getElementById('s-domain').value.trim();
+    const btn    = document.getElementById('s-btn');
+    const box    = document.getElementById('s-result');
+
+    if (!first || !last || !domain) {
+      box.innerHTML = '<span style="color:#c00">Please fill in all three fields.</span>';
+      box.classList.add('visible');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Searching…';
+    box.innerHTML = '<span style="color:#666">Connecting to mail server…</span>';
+    box.classList.add('visible');
+
+    try {
+      const resp = await fetch('/lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({first, last, domain}),
+      });
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        box.innerHTML = `<span style="color:#c00">Error: ${data.detail || resp.statusText}</span>`;
+        return;
+      }
+
+      const badge = badgeHtml(data.status);
+      let html = `${badge}`;
+      if (data.email) {
+        html += `<div class="email-found">${data.email}</div>`;
+      }
+      html += `<div style="margin-top:8px;font-size:12px;color:#666">`;
+      if (data.catch_all) html += 'Domain accepts all addresses (catch-all). ';
+      html += `${data.permutations_tried} pattern${data.permutations_tried !== 1 ? 's' : ''} tried.</div>`;
+      box.innerHTML = html;
+    } catch (err) {
+      box.innerHTML = `<span style="color:#c00">Network error: ${err.message}</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Find email';
+    }
+  }
+
+  // --- Batch ---
+  let currentJobId = null;
+  let pollInterval = null;
+
+  async function handleFile(file) {
+    if (!file) return;
+
+    // Reset state
+    clearInterval(pollInterval);
+    currentJobId = null;
+    document.getElementById('b-tbody').innerHTML = '';
+    document.getElementById('b-table').style.display = 'none';
+    document.getElementById('b-actions').style.display = 'none';
+    document.getElementById('b-download').disabled = true;
+    document.getElementById('b-summary').textContent = '';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    document.getElementById('b-progress-label').textContent = 'Uploading…';
+    document.getElementById('b-progress-wrap').classList.add('visible');
+
+    try {
+      const resp = await fetch('/batch', { method: 'POST', body: formData });
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        document.getElementById('b-progress-label').textContent = `Error: ${data.detail || resp.statusText}`;
+        return;
+      }
+
+      currentJobId = data.job_id;
+      pollInterval = setInterval(pollJob, 1500);
+      pollJob();
+    } catch (err) {
+      document.getElementById('b-progress-label').textContent = `Upload failed: ${err.message}`;
+    }
+  }
+
+  async function pollJob() {
+    if (!currentJobId) return;
+    try {
+      const resp = await fetch(`/jobs/${currentJobId}`);
+      if (!resp.ok) return;
+      const job = await resp.json();
+
+      const pct = Math.round((job.progress || 0) * 100);
+      document.getElementById('b-progress-bar').style.width = pct + '%';
+      document.getElementById('b-progress-label').textContent =
+        `${job.done || 0} / ${job.total || 0} contacts processed…`;
+
+      renderTable(job.results || []);
+
+      if (job.status === 'completed' || job.status === 'failed') {
+        clearInterval(pollInterval);
+        document.getElementById('b-progress-label').textContent =
+          job.status === 'completed'
+            ? `Done — ${job.total} contacts processed`
+            : `Failed after ${job.done} contacts`;
+        document.getElementById('b-actions').style.display = 'flex';
+        document.getElementById('b-download').disabled = false;
+        summarize(job.results || []);
+      }
+    } catch (_) {}
+  }
+
+  function renderTable(results) {
+    const tbody = document.getElementById('b-tbody');
+    tbody.innerHTML = '';
+    results.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${esc(r.first)} ${esc(r.last)}</td>
+        <td>${esc(r.domain)}</td>
+        <td class="email">${r.email ? esc(r.email) : '—'}</td>
+        <td>${badgeHtml(r.status)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('b-table').style.display = results.length ? 'table' : 'none';
+  }
+
+  function summarize(results) {
+    const counts = {};
+    results.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
+    const parts = Object.entries(counts).map(([s, n]) => `${n} ${s}`);
+    document.getElementById('b-summary').textContent = parts.join(' · ');
+  }
+
+  async function downloadCSV() {
+    if (!currentJobId) return;
+    const a = document.createElement('a');
+    a.href = `/jobs/${currentJobId}/csv`;
+    a.download = '';
+    a.click();
+  }
+
+  // --- Helpers ---
+  function badgeHtml(status) {
+    return `<span class="status-badge badge-${status}">${status}</span>`;
+  }
+
+  function esc(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
+
+</body>
+</html>
