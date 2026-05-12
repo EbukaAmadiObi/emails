@@ -27,7 +27,7 @@
     header h1 { font-size: 16px; font-weight: 600; }
     header span { font-size: 12px; color: #666; }
 
-    .container { max-width: 960px; margin: 32px auto; padding: 0 24px; }
+    .container { max-width: 960px; margin: 32px auto; padding: 0 24px 80px; }
 
     .tabs {
       display: flex;
@@ -190,26 +190,26 @@
     .hint { font-size: 12px; color: #888; margin-top: 8px; }
 
     footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
       border-top: 1px solid #e0e0e0;
       background: #fff;
-      padding: 16px 24px;
+      padding: 14px 24px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      margin-top: 48px;
     }
 
-    footer a.logo {
-      font-size: 14px;
-      font-weight: 700;
-      color: #1a1a1a;
-      text-decoration: none;
-      letter-spacing: 0.05em;
+    footer a.logo img { width: 48px; display: block; }
+
+    footer .made-by {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 13px;
+      color: #888;
     }
-
-    footer a.logo:hover { color: #555; }
-
-    footer .made-by { font-size: 13px; color: #888; }
   </style>
 
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7844656534810081"
@@ -295,7 +295,9 @@
 </div><!-- /container -->
 
 <footer>
-  <a href="https://ebuka.dev" class="logo" target="_blank" rel="noopener">EAO</a>
+  <a href="https://ebuka.dev" class="logo" target="_blank" rel="noopener">
+    <img src="/logo.svg" alt="EAO Logo">
+  </a>
   <span class="made-by">made with &lt;3 by Ebuka</span>
 </footer>
 
