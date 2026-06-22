@@ -51,7 +51,7 @@ async def _get_domain_sem(domain: str) -> asyncio.Semaphore:
     return _domain_sems[domain]
 
 
-_CONTACT_TIMEOUT = int(os.environ.get("CONTACT_TIMEOUT", "60"))
+_CONTACT_TIMEOUT = int(os.environ.get("CONTACT_TIMEOUT", "120"))
 
 
 async def _process_contact(
@@ -80,7 +80,7 @@ async def _process_contact(
                 )
                 return LookupResult(
                     first=first, last=last, domain=domain,
-                    status=LookupStatus.inconclusive,
+                    status=LookupStatus.timed_out,
                 )
 
 

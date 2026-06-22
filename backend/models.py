@@ -7,7 +7,8 @@ class LookupStatus(str, Enum):
     verified = "verified"
     not_found = "not_found"
     unverifiable = "unverifiable"   # catch-all domain
-    inconclusive = "inconclusive"   # SMTP errors / timeouts / sender rejected
+    inconclusive = "inconclusive"   # SMTP errors / sender rejected
+    timed_out = "timed_out"         # per-contact deadline exceeded
 
 
 class LookupRequest(BaseModel):

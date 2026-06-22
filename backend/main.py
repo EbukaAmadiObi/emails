@@ -147,6 +147,28 @@ async def job_status(job_id: str):
     return job
 
 
+@app.post("/jobs/{job_id}/retry")
+async def retry_timed_out(job_id: str):
+    from_addr = _get_from_addr()
+    job = worker.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status.value not in ("completed", "failed"):
+        raise HTTPException(status_code=409, detail="Job not complete yet")
+
+    contacts = [
+        {"first": r.first, "last": r.last, "domain": r.domain}
+        for r in job.results
+        if r.status == LookupStatus.timed_out
+    ]
+    if not contacts:
+        raise HTTPException(status_code=400, detail="No timed-out contacts to retry")
+
+    new_job_id = worker.create_job(total=len(contacts))
+    asyncio.create_task(worker.run_batch(new_job_id, contacts, from_addr))
+    return {"job_id": new_job_id}
+
+
 @app.get("/jobs/{job_id}/csv")
 async def job_csv(job_id: str):
     job = worker.get_job(job_id)

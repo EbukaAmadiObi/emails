@@ -124,6 +124,7 @@
     .badge-not_found  { background: #f8d7da; color: #721c24; }
     .badge-unverifiable { background: #fff3cd; color: #856404; }
     .badge-inconclusive { background: #e2e3e5; color: #383d41; }
+    .badge-timed_out  { background: #fde8d8; color: #7d3c00; }
 
     .email-found { font-size: 18px; font-weight: 600; margin-top: 8px; font-family: monospace; }
 
@@ -275,6 +276,7 @@
 
       <div id="b-actions" class="batch-actions" style="display:none">
         <button id="b-download" onclick="downloadCSV()" disabled>Download results CSV</button>
+        <button id="b-retry" onclick="retryTimedOut()" style="display:none"></button>
         <span id="b-summary"></span>
       </div>
 
@@ -446,6 +448,15 @@
         document.getElementById('b-actions').style.display = 'flex';
         document.getElementById('b-download').disabled = false;
         summarize(job.results || []);
+        const timedOut = (job.results || []).filter(r => r.status === 'timed_out');
+        const retryBtn = document.getElementById('b-retry');
+        if (timedOut.length > 0) {
+          retryBtn.textContent = `Retry timed out (${timedOut.length})`;
+          retryBtn.style.display = '';
+          retryBtn.disabled = false;
+        } else {
+          retryBtn.style.display = 'none';
+        }
       }
     } catch (_) {}
   }
@@ -482,6 +493,41 @@
     a.href = `/jobs/${currentJobId}/csv`;
     a.download = '';
     a.click();
+  }
+
+  async function retryTimedOut() {
+    if (!currentJobId) return;
+    const retryBtn = document.getElementById('b-retry');
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'Retrying…';
+
+    try {
+      const resp = await fetch(`/jobs/${currentJobId}/retry`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) {
+        retryBtn.textContent = `Retry failed: ${data.detail || resp.statusText}`;
+        retryBtn.disabled = false;
+        return;
+      }
+
+      // Reset to a fresh polling state for the retry job
+      clearInterval(pollInterval);
+      currentJobId = data.job_id;
+      renderedRowCount = 0;
+      document.getElementById('b-tbody').innerHTML = '';
+      document.getElementById('b-table').style.display = 'none';
+      document.getElementById('b-actions').style.display = 'none';
+      document.getElementById('b-download').disabled = true;
+      document.getElementById('b-summary').textContent = '';
+      document.getElementById('b-progress-label').textContent = 'Retrying timed-out contacts…';
+      document.getElementById('b-progress-wrap').classList.add('visible');
+
+      pollInterval = setInterval(pollJob, 1500);
+      pollJob();
+    } catch (err) {
+      retryBtn.textContent = `Retry failed: ${err.message}`;
+      retryBtn.disabled = false;
+    }
   }
 
   // --- Helpers ---
