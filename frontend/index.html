@@ -393,6 +393,7 @@
     // Reset state
     clearInterval(pollInterval);
     currentJobId = null;
+    renderedRowCount = 0;
     document.getElementById('b-tbody').innerHTML = '';
     document.getElementById('b-table').style.display = 'none';
     document.getElementById('b-actions').style.display = 'none';
@@ -434,7 +435,7 @@
       document.getElementById('b-progress-label').textContent =
         `${job.done || 0} / ${job.total || 0} contacts processed…`;
 
-      renderTable(job.results || []);
+      appendNewRows(job.results || []);
 
       if (job.status === 'completed' || job.status === 'failed') {
         clearInterval(pollInterval);
@@ -449,10 +450,12 @@
     } catch (_) {}
   }
 
-  function renderTable(results) {
+  let renderedRowCount = 0;
+
+  function appendNewRows(results) {
     const tbody = document.getElementById('b-tbody');
-    tbody.innerHTML = '';
-    results.forEach(r => {
+    for (let i = renderedRowCount; i < results.length; i++) {
+      const r = results[i];
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>${esc(r.first)} ${esc(r.last)}</td>
@@ -461,7 +464,8 @@
         <td>${badgeHtml(r.status)}</td>
       `;
       tbody.appendChild(tr);
-    });
+    }
+    renderedRowCount = results.length;
     document.getElementById('b-table').style.display = results.length ? 'table' : 'none';
   }
 

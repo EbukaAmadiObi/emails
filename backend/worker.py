@@ -51,6 +51,9 @@ async def _get_domain_sem(domain: str) -> asyncio.Semaphore:
     return _domain_sems[domain]
 
 
+_CONTACT_TIMEOUT = int(os.environ.get("CONTACT_TIMEOUT", "60"))
+
+
 async def _process_contact(
     first: str,
     last: str,
@@ -63,9 +66,22 @@ async def _process_contact(
 
     async with domain_sem:
         async with _global_sem:
-            return await asyncio.to_thread(
-                _verify_contact_sync, first, last, domain, permutations, from_addr
-            )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _verify_contact_sync, first, last, domain, permutations, from_addr
+                    ),
+                    timeout=_CONTACT_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Contact %s %s@%s timed out after %ds",
+                    first, last, domain, _CONTACT_TIMEOUT,
+                )
+                return LookupResult(
+                    first=first, last=last, domain=domain,
+                    status=LookupStatus.inconclusive,
+                )
 
 
 def _verify_contact_sync(

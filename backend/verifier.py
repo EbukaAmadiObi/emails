@@ -94,7 +94,7 @@ def verify_address(mx_host: str, address: str, from_addr: str) -> LookupStatus:
         if status != LookupStatus.inconclusive:
             return status
         if attempt < 2:
-            time.sleep(3)
+            time.sleep(1)
     return LookupStatus.inconclusive
 
 
