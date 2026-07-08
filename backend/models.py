@@ -50,10 +50,12 @@ class JobStatus(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class Job(BaseModel):
     job_id: str
+    kind: str = "batch"     # "batch" | "single"
     status: JobStatus = JobStatus.pending
     progress: float = 0.0   # 0.0 – 1.0
     total: int = 0

@@ -13,13 +13,14 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .models import LookupRequest, LookupResult, LookupStatus
+from .models import LookupRequest, LookupStatus
 from . import verifier, worker
 from .permutations import generate_permutations
 
 logger = logging.getLogger(__name__)
 
 MAX_BATCH_SIZE = int(os.environ.get("MAX_BATCH_SIZE", "1000"))
+TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 
 def _get_from_addr() -> str:
@@ -65,20 +66,22 @@ app = FastAPI(title="Email Finder", lifespan=lifespan)
 # Single lookup
 # ---------------------------------------------------------------------------
 
-@app.post("/lookup", response_model=LookupResult)
+@app.post("/lookup")
 async def lookup(req: LookupRequest):
     from_addr = _get_from_addr()
 
     try:
-        perms = generate_permutations(req.first, req.last)
+        generate_permutations(req.first, req.last)  # validate early -> 422
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    result = await asyncio.to_thread(
-        worker._verify_contact_sync,
-        req.first, req.last, req.domain, perms, from_addr,
-    )
-    return result
+    job_id = worker.create_job(total=1, kind="single")
+    asyncio.create_task(worker.run_batch(
+        job_id,
+        [{"first": req.first, "last": req.last, "domain": req.domain}],
+        from_addr,
+    ))
+    return {"job_id": job_id}
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +150,23 @@ async def job_status(job_id: str):
     return job
 
 
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    job = worker.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not worker.cancel_job(job_id):
+        raise HTTPException(status_code=409, detail="Job already finished")
+    return {"job_id": job_id, "status": "cancelled"}
+
+
 @app.post("/jobs/{job_id}/retry")
 async def retry_timed_out(job_id: str):
     from_addr = _get_from_addr()
     job = worker.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status.value not in ("completed", "failed"):
+    if job.status.value not in TERMINAL_STATUSES:
         raise HTTPException(status_code=409, detail="Job not complete yet")
 
     contacts = [
@@ -175,7 +188,7 @@ async def job_csv(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status.value not in ("completed", "failed"):
+    if job.status.value not in TERMINAL_STATUSES:
         return JSONResponse(
             status_code=202,
             content={"message": "Job not complete yet", "status": job.status.value},
@@ -188,6 +201,11 @@ async def job_csv(job_id: str):
             ["first_name", "last_name", "domain", "email", "status",
              "permutations_tried", "catch_all"]
         )
+        output.seek(0)
+        yield output.read()
+        output.seek(0)
+        output.truncate(0)
+
         for r in job.results:
             writer.writerow([
                 r.first, r.last, r.domain,

@@ -39,13 +39,11 @@ NOT_FOUND_RESULT = LookupResult(
 # ---------------------------------------------------------------------------
 
 class TestLookup:
-    def test_valid_returns_200(self, client):
-        with patch("backend.main.worker._verify_contact_sync", return_value=VERIFIED_RESULT):
+    def test_valid_returns_job_id(self, client):
+        with patch("backend.worker.run_batch", new_callable=AsyncMock):
             resp = client.post("/lookup", json={"first": "John", "last": "Smith", "domain": "acme.com"})
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["email"] == "john.smith@acme.com"
-        assert data["status"] == "verified"
+        assert "job_id" in resp.json()
 
     def test_missing_first_returns_422(self, client):
         resp = client.post("/lookup", json={"last": "Smith", "domain": "acme.com"})
@@ -60,10 +58,10 @@ class TestLookup:
         assert resp.status_code == 422
 
     def test_domain_stripped_and_lowercased(self, client):
-        with patch("backend.main.worker._verify_contact_sync", return_value=NOT_FOUND_RESULT) as m:
+        with patch("backend.worker.run_batch", new_callable=AsyncMock) as m:
             client.post("/lookup", json={"first": "John", "last": "Smith", "domain": " ACME.COM "})
-        call_args = m.call_args[0]
-        assert call_args[2] == "acme.com"  # domain is 3rd positional arg
+        contacts = m.call_args[0][1]  # (job_id, contacts, from_addr)
+        assert contacts[0]["domain"] == "acme.com"
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +128,33 @@ class TestJobStatus:
 
 
 # ---------------------------------------------------------------------------
+# POST /jobs/{id}/cancel
+# ---------------------------------------------------------------------------
+
+class TestCancel:
+    def test_unknown_job_returns_404(self, client):
+        with patch("backend.main.worker.get_job", return_value=None):
+            resp = client.post("/jobs/nonexistent/cancel")
+        assert resp.status_code == 404
+
+    def test_already_finished_job_returns_409(self, client):
+        job = Job(job_id="abc", status=JobStatus.completed, total=1, done=1)
+        with patch("backend.main.worker.get_job", return_value=job), \
+             patch("backend.main.worker.cancel_job", return_value=False):
+            resp = client.post("/jobs/abc/cancel")
+        assert resp.status_code == 409
+
+    def test_running_job_returns_200(self, client):
+        job = Job(job_id="abc", status=JobStatus.running, total=5, done=2)
+        with patch("backend.main.worker.get_job", return_value=job), \
+             patch("backend.main.worker.cancel_job", return_value=True) as m:
+            resp = client.post("/jobs/abc/cancel")
+        assert resp.status_code == 200
+        assert resp.json() == {"job_id": "abc", "status": "cancelled"}
+        m.assert_called_once_with("abc")
+
+
+# ---------------------------------------------------------------------------
 # GET /jobs/{id}/csv
 # ---------------------------------------------------------------------------
 
@@ -144,6 +169,24 @@ class TestJobCSV:
         assert resp.status_code == 200
         assert "text/csv" in resp.headers["content-type"]
         assert "john.smith@acme.com" in resp.text
+
+    def test_cancelled_job_returns_csv(self, client):
+        job = Job(
+            job_id="abc", status=JobStatus.cancelled, total=5, done=2,
+            results=[VERIFIED_RESULT, NOT_FOUND_RESULT],
+        )
+        with patch("backend.main.worker.get_job", return_value=job):
+            resp = client.get("/jobs/abc/csv")
+        assert resp.status_code == 200
+        assert "text/csv" in resp.headers["content-type"]
+        assert "john.smith@acme.com" in resp.text
+
+    def test_cancelled_job_with_no_results_still_returns_header(self, client):
+        job = Job(job_id="abc", status=JobStatus.cancelled, total=5, done=0, results=[])
+        with patch("backend.main.worker.get_job", return_value=job):
+            resp = client.get("/jobs/abc/csv")
+        assert resp.status_code == 200
+        assert resp.text.strip() == "first_name,last_name,domain,email,status,permutations_tried,catch_all"
 
     def test_pending_job_returns_202(self, client):
         job = Job(job_id="abc", status=JobStatus.running, total=5)

@@ -272,7 +272,10 @@
       <div id="b-progress-wrap" class="progress-bar-wrap">
         <div id="b-progress-bar" class="progress-bar"></div>
       </div>
-      <div id="b-progress-label" class="progress-label"></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="b-progress-label" class="progress-label"></div>
+        <button id="b-cancel" onclick="cancelBatch()" style="display:none;background:#eee;color:#333;padding:4px 12px;font-size:12px">Cancel</button>
+      </div>
 
       <div id="b-actions" class="batch-actions" style="display:none">
         <button id="b-download" onclick="downloadCSV()" disabled>Download results CSV</button>
@@ -332,10 +335,55 @@
     if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
   });
 
+  // --- Resumable-job storage (survives tab close / reload) ---
+  const BATCH_KEY = 'emailFinder.batchJobId';
+  const SINGLE_KEY = 'emailFinder.singleJob';
+  const TERMINAL = ['completed', 'failed', 'cancelled'];
+
+  function storageGet(key) {
+    try { return localStorage.getItem(key); } catch (_) { return null; }
+  }
+  function storageSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) {}
+  }
+  function storageRemove(key) {
+    try { localStorage.removeItem(key); } catch (_) {}
+  }
+
   // --- Single lookup ---
   document.getElementById('s-domain').addEventListener('keydown', e => {
     if (e.key === 'Enter') doLookup();
   });
+
+  let singleJobId = null;
+  let singlePollInterval = null;
+
+  function showSingleSearching() {
+    document.getElementById('s-result').innerHTML = `
+      <span style="color:#666">Connecting to mail server…</span>
+      <button onclick="cancelSingle()" style="margin-left:12px;background:#eee;color:#333;padding:4px 12px;font-size:12px">Cancel</button>
+    `;
+  }
+
+  function renderSingleResult(data) {
+    const badge = badgeHtml(data.status);
+    let html = `${badge}`;
+    if (data.email) {
+      html += `<div class="email-found">${data.email}</div>`;
+    }
+    html += `<div style="margin-top:8px;font-size:12px;color:#666">`;
+    if (data.catch_all) html += 'Domain accepts all addresses (catch-all). ';
+    html += `${data.permutations_tried} pattern${data.permutations_tried !== 1 ? 's' : ''} tried.</div>`;
+    document.getElementById('s-result').innerHTML = html;
+  }
+
+  function finishSingle() {
+    clearInterval(singlePollInterval);
+    singleJobId = null;
+    storageRemove(SINGLE_KEY);
+    document.getElementById('s-btn').disabled = false;
+    document.getElementById('s-btn').textContent = 'Find email';
+  }
 
   async function doLookup() {
     const first  = document.getElementById('s-first').value.trim();
@@ -350,9 +398,10 @@
       return;
     }
 
+    clearInterval(singlePollInterval);
     btn.disabled = true;
     btn.textContent = 'Searching…';
-    box.innerHTML = '<span style="color:#666">Connecting to mail server…</span>';
+    showSingleSearching();
     box.classList.add('visible');
 
     try {
@@ -365,24 +414,54 @@
 
       if (!resp.ok) {
         box.innerHTML = `<span style="color:#c00">Error: ${data.detail || resp.statusText}</span>`;
+        btn.disabled = false;
+        btn.textContent = 'Find email';
         return;
       }
 
-      const badge = badgeHtml(data.status);
-      let html = `${badge}`;
-      if (data.email) {
-        html += `<div class="email-found">${data.email}</div>`;
-      }
-      html += `<div style="margin-top:8px;font-size:12px;color:#666">`;
-      if (data.catch_all) html += 'Domain accepts all addresses (catch-all). ';
-      html += `${data.permutations_tried} pattern${data.permutations_tried !== 1 ? 's' : ''} tried.</div>`;
-      box.innerHTML = html;
+      singleJobId = data.job_id;
+      storageSet(SINGLE_KEY, JSON.stringify({id: singleJobId, first, last, domain}));
+      singlePollInterval = setInterval(pollSingleJob, 1500);
+      pollSingleJob();
     } catch (err) {
       box.innerHTML = `<span style="color:#c00">Network error: ${err.message}</span>`;
-    } finally {
       btn.disabled = false;
       btn.textContent = 'Find email';
     }
+  }
+
+  async function pollSingleJob() {
+    if (!singleJobId) return;
+    try {
+      const resp = await fetch(`/jobs/${singleJobId}`);
+      if (resp.status === 404) {
+        finishSingle();
+        document.getElementById('s-result').innerHTML =
+          '<span style="color:#666">Previous lookup is no longer available (server restarted).</span>';
+        return;
+      }
+      if (!resp.ok) return;
+      const job = await resp.json();
+
+      if (job.status === 'completed') {
+        finishSingle();
+        if (job.results && job.results[0]) renderSingleResult(job.results[0]);
+      } else if (job.status === 'cancelled') {
+        finishSingle();
+        document.getElementById('s-result').innerHTML = '<span style="color:#666">Lookup cancelled.</span>';
+      } else if (job.status === 'failed') {
+        finishSingle();
+        document.getElementById('s-result').innerHTML = '<span style="color:#c00">Lookup failed.</span>';
+      }
+    } catch (_) {}
+  }
+
+  async function cancelSingle() {
+    if (!singleJobId) return;
+    try {
+      await fetch(`/jobs/${singleJobId}/cancel`, { method: 'POST' });
+    } catch (_) {}
+    pollSingleJob();
   }
 
   // --- Batch ---
@@ -401,6 +480,7 @@
     document.getElementById('b-actions').style.display = 'none';
     document.getElementById('b-download').disabled = true;
     document.getElementById('b-summary').textContent = '';
+    document.getElementById('b-cancel').style.display = 'none';
 
     const formData = new FormData();
     formData.append('file', file);
@@ -418,6 +498,8 @@
       }
 
       currentJobId = data.job_id;
+      storageSet(BATCH_KEY, currentJobId);
+      document.getElementById('b-cancel').style.display = '';
       pollInterval = setInterval(pollJob, 1500);
       pollJob();
     } catch (err) {
@@ -429,6 +511,15 @@
     if (!currentJobId) return;
     try {
       const resp = await fetch(`/jobs/${currentJobId}`);
+      if (resp.status === 404) {
+        clearInterval(pollInterval);
+        currentJobId = null;
+        storageRemove(BATCH_KEY);
+        document.getElementById('b-progress-label').textContent =
+          'Previous batch job is no longer available (server restarted).';
+        document.getElementById('b-cancel').style.display = 'none';
+        return;
+      }
       if (!resp.ok) return;
       const job = await resp.json();
 
@@ -439,12 +530,15 @@
 
       appendNewRows(job.results || []);
 
-      if (job.status === 'completed' || job.status === 'failed') {
+      if (TERMINAL.includes(job.status)) {
         clearInterval(pollInterval);
-        document.getElementById('b-progress-label').textContent =
-          job.status === 'completed'
-            ? `Done — ${job.total} contacts processed`
-            : `Failed after ${job.done} contacts`;
+        document.getElementById('b-cancel').style.display = 'none';
+        storageRemove(BATCH_KEY);
+        let label;
+        if (job.status === 'completed') label = `Done — ${job.total} contacts processed`;
+        else if (job.status === 'cancelled') label = `Cancelled after ${job.done} of ${job.total} contacts`;
+        else label = `Failed after ${job.done} contacts`;
+        document.getElementById('b-progress-label').textContent = label;
         document.getElementById('b-actions').style.display = 'flex';
         document.getElementById('b-download').disabled = false;
         summarize(job.results || []);
@@ -459,6 +553,14 @@
         }
       }
     } catch (_) {}
+  }
+
+  async function cancelBatch() {
+    if (!currentJobId) return;
+    try {
+      await fetch(`/jobs/${currentJobId}/cancel`, { method: 'POST' });
+    } catch (_) {}
+    pollJob();
   }
 
   let renderedRowCount = 0;
@@ -513,6 +615,7 @@
       // Reset to a fresh polling state for the retry job
       clearInterval(pollInterval);
       currentJobId = data.job_id;
+      storageSet(BATCH_KEY, currentJobId);
       renderedRowCount = 0;
       document.getElementById('b-tbody').innerHTML = '';
       document.getElementById('b-table').style.display = 'none';
@@ -521,6 +624,7 @@
       document.getElementById('b-summary').textContent = '';
       document.getElementById('b-progress-label').textContent = 'Retrying timed-out contacts…';
       document.getElementById('b-progress-wrap').classList.add('visible');
+      document.getElementById('b-cancel').style.display = '';
 
       pollInterval = setInterval(pollJob, 1500);
       pollJob();
@@ -542,6 +646,70 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  // --- Resume in-flight jobs after reload / reopening the tab ---
+  async function restoreJobs() {
+    const batchId = storageGet(BATCH_KEY);
+    if (batchId) {
+      try {
+        const resp = await fetch(`/jobs/${batchId}`);
+        if (resp.status === 404) {
+          storageRemove(BATCH_KEY);
+          document.getElementById('b-progress-wrap').classList.add('visible');
+          document.getElementById('b-progress-label').textContent =
+            'Previous batch job is no longer available (server restarted).';
+          const batchTab = document.querySelector('.tab[data-tab="batch"]');
+          if (batchTab) batchTab.click();
+        } else if (resp.ok) {
+          const job = await resp.json();
+          currentJobId = batchId;
+          renderedRowCount = 0;
+          document.getElementById('b-tbody').innerHTML = '';
+          document.getElementById('b-actions').style.display = 'none';
+          document.getElementById('b-download').disabled = true;
+          document.getElementById('b-summary').textContent = '';
+          document.getElementById('b-progress-wrap').classList.add('visible');
+          if (!TERMINAL.includes(job.status)) {
+            document.getElementById('b-cancel').style.display = '';
+          }
+          const batchTab = document.querySelector('.tab[data-tab="batch"]');
+          if (batchTab) batchTab.click();
+          pollInterval = setInterval(pollJob, 1500);
+          pollJob();
+        }
+      } catch (_) {}
+    }
+
+    const singleRaw = storageGet(SINGLE_KEY);
+    if (singleRaw) {
+      try {
+        const stored = JSON.parse(singleRaw);
+        const resp = await fetch(`/jobs/${stored.id}`);
+        if (resp.status === 404) {
+          storageRemove(SINGLE_KEY);
+          document.getElementById('s-result').innerHTML =
+            '<span style="color:#666">Previous lookup is no longer available (server restarted).</span>';
+          document.getElementById('s-result').classList.add('visible');
+        } else if (resp.ok) {
+          document.getElementById('s-first').value = stored.first;
+          document.getElementById('s-last').value = stored.last;
+          document.getElementById('s-domain').value = stored.domain;
+          singleJobId = stored.id;
+          const btn = document.getElementById('s-btn');
+          btn.disabled = true;
+          btn.textContent = 'Searching…';
+          showSingleSearching();
+          document.getElementById('s-result').classList.add('visible');
+          singlePollInterval = setInterval(pollSingleJob, 1500);
+          pollSingleJob();
+        }
+      } catch (_) {
+        storageRemove(SINGLE_KEY);
+      }
+    }
+  }
+
+  restoreJobs();
 </script>
 
 </body>

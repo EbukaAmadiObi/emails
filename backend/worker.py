@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 # In-memory job store. State is lost on server restart (acceptable for v1).
 _jobs: dict[str, Job] = {}
 
+# Tracks the asyncio Tasks backing each running job, so cancel_job() can
+# cancel them. Tasks aren't stored on Job itself (not Pydantic-serializable).
+_job_tasks: dict[str, list[asyncio.Task]] = {}
+
 # Global SMTP concurrency limit (default: 10)
 _MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "10"))
 _MAX_CONCURRENT_PER_DOMAIN = int(os.environ.get("MAX_CONCURRENT_PER_DOMAIN", "2"))
@@ -35,14 +39,27 @@ def _init_semaphores() -> None:
     _global_sem = asyncio.Semaphore(_MAX_CONCURRENT)
 
 
-def create_job(total: int) -> str:
+def create_job(total: int, kind: str = "batch") -> str:
     job_id = str(uuid.uuid4())
-    _jobs[job_id] = Job(job_id=job_id, total=total)
+    _jobs[job_id] = Job(job_id=job_id, total=total, kind=kind)
     return job_id
 
 
 def get_job(job_id: str) -> Optional[Job]:
     return _jobs.get(job_id)
+
+
+def cancel_job(job_id: str) -> bool:
+    """Request cancellation of a running job. Returns False if the job is
+    unknown or already in a terminal state."""
+    job = _jobs.get(job_id)
+    if not job or job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+        return False
+
+    job.status = JobStatus.cancelled
+    for task in _job_tasks.get(job_id, []):
+        task.cancel()
+    return True
 
 
 async def _get_domain_sem(domain: str) -> asyncio.Semaphore:
@@ -175,11 +192,30 @@ async def run_batch(job_id: str, contacts: list[dict], from_addr: str) -> None:
         job.progress = job.done / job.total if job.total > 0 else 1.0
 
     tasks = [asyncio.create_task(process_one(c)) for c in contacts]
+    _job_tasks[job_id] = tasks
 
+    # return_exceptions=True so a cancelled child task (cancel_job() cancels
+    # tasks still queued on a semaphore) surfaces as a captured
+    # CancelledError instead of aborting gather — contacts that already
+    # finished or are past cancellation keep their results, and job state
+    # stays consistent. A task cancelled while awaiting asyncio.to_thread()
+    # releases its semaphores immediately, but the underlying SMTP thread
+    # keeps running to completion in the background (threads aren't
+    # interruptible) — cancellation relieves queued pressure, not in-flight
+    # SMTP conversations.
     try:
-        await asyncio.gather(*tasks)
-        job.status = JobStatus.completed
-        job.progress = 1.0
-    except Exception as e:
-        logger.exception("Batch job %s failed: %s", job_id, e)
-        job.status = JobStatus.failed
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if job.status == JobStatus.cancelled:
+            return
+        errors = [
+            r for r in results
+            if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError)
+        ]
+        if errors:
+            logger.error("Batch job %s failed: %s", job_id, errors[0])
+            job.status = JobStatus.failed
+        else:
+            job.status = JobStatus.completed
+            job.progress = 1.0
+    finally:
+        _job_tasks.pop(job_id, None)
